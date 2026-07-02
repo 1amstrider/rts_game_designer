@@ -8,19 +8,25 @@ import os
 import uuid
 import shutil
 from typing import Optional, List
+from dotenv import load_dotenv
 
-from config import load_config, save_config, ensure_directories, AppConfig
-from database.database import Database
-from models.hero import Hero, HeroImage
-from models.age import Age
-from models.property import PropertyDefinition, PropertyCategory, PropertyType
-from services.hero_service import HeroService
-from services.age_service import AgeService
-from services.property_service import PropertyService
-from services.image_service import ImageService
-from services.excel_service import ExcelService
+# Load environment variables
+load_dotenv()
+
+# Import cloud services (optional - only used when env vars are set)
+try:
+    from database.supabase_client import SupabaseDB
+    from services.cloudinary_service import CloudinaryService
+    HAS_CLOUD = True
+except ImportError:
+    HAS_CLOUD = False
 
 app = FastAPI(title="RTS Game Designer", version="1.0.0")
+
+# Initialize cloud services if credentials are available
+supabase_db = SupabaseDB() if HAS_CLOUD else None
+cloudinary_svc = CloudinaryService() if HAS_CLOUD else None
+IS_CLOUD_MODE = supabase_db and supabase_db.is_cloud if HAS_CLOUD else False
 
 # Static files and templates
 APP_ROOT = Path(__file__).resolve().parent
