@@ -949,39 +949,57 @@ INDEX_HTML = r"""
         </div>
 
         <div id="docsView" class="manage-view panel-body">
-          <div class="row wrap" style="justify-content: space-between; margin-bottom: 12px;">
-            <div>
+          <div class="row wrap" style="justify-content: space-between; margin-bottom: 12px; align-items: center;">
+            <div class="row wrap" style="gap: 12px;">
               <strong>Design Documents</strong>
-              <div class="muted small">Edit game design docs. All changes are versioned.</div>
+              <span class="muted small">For developers & designers — edit and track changes</span>
             </div>
             <div class="row wrap">
-              <button class="btn" onclick="createNewDoc()">+ New Doc</button>
-              <button class="btn primary" onclick="saveDoc()">Save & Commit</button>
+              <select id="docSelect" class="select" style="min-width: 200px;" onchange="loadDoc()"></select>
+              <button class="btn" id="docEditToggle" onclick="toggleDocEditMode()">Edit</button>
+              <button class="btn" onclick="createNewDoc()">+ New</button>
+              <button class="btn primary" id="docSaveBtn" onclick="saveDoc()" style="display:none;">Save & Commit</button>
             </div>
           </div>
           <div class="row" style="gap: 12px; align-items: stretch; height: calc(100% - 60px);">
-            <div style="flex: 1; display: flex; flex-direction: column; gap: 8px;">
-              <label class="small muted">Document</label>
-              <select id="docSelect" class="select" onchange="loadDoc()"></select>
-              <label class="small muted">Content (Markdown)</label>
-              <textarea id="docEditor" class="textarea" style="flex: 1; min-height: 400px; font-family: monospace; font-size: 13px;" placeholder="# Title\n\nWrite your design document here..."></textarea>
+            <!-- Editor (hidden in view mode) -->
+            <div id="docEditorPanel" style="flex: 1; display: none; flex-direction: column; gap: 8px;">
+              <label class="small muted">Markdown Editor</label>
+              <textarea id="docEditor" class="textarea" style="flex: 1; min-height: 400px; font-family: 'Consolas', 'Monaco', monospace; font-size: 13px; line-height: 1.5;" placeholder="# Title\n\nWrite your design document here..." oninput="renderDocPreview()"></textarea>
             </div>
-            <div style="flex: 1; display: flex; flex-direction: column; gap: 8px;">
-              <label class="small muted">Preview</label>
-              <div id="docPreview" class="panel-body" style="flex: 1; overflow: auto; background: var(--panel-2); border-radius: 10px; padding: 16px;"></div>
+            <!-- Viewer -->
+            <div id="docViewerPanel" style="flex: 1; display: flex; flex-direction: column; gap: 8px;">
+              <div class="row wrap" style="justify-content: space-between; align-items: center;">
+                <label class="small muted" id="docTitleLabel">Document Viewer</label>
+                <span class="badge" id="docVersionBadge">Latest</span>
+              </div>
+              <div id="docPreview" class="panel-body" style="flex: 1; overflow: auto; background: var(--panel-2); border-radius: 10px; padding: 24px; font-size: 14px; line-height: 1.6;"></div>
             </div>
           </div>
         </div>
       </div>
 
       <div class="panel right-panel">
-        <div class="panel-header"><strong>Navigation & Tools</strong></div>
+        <div class="panel-header"><strong id="rightPanelTitle">Navigation & Tools</strong></div>
         <div class="panel-body">
-          <div class="section-title">Compare Selection</div>
-          <div id="comparePicker" class="sidebar-list"></div>
-          <div class="separator"></div>
-          <div class="section-title">Feature Categories</div>
-          <div id="categoryNav" class="sidebar-list"></div>
+          <div id="rightPanelStandard">
+            <div class="section-title">Compare Selection</div>
+            <div id="comparePicker" class="sidebar-list"></div>
+            <div class="separator"></div>
+            <div class="section-title">Feature Categories</div>
+            <div id="categoryNav" class="sidebar-list"></div>
+          </div>
+          <div id="rightPanelDocs" style="display:none;">
+            <div class="section-title">Version History</div>
+            <div id="docHistory" class="sidebar-list" style="font-size: 12px;">
+              <div class="empty">Select a document to see its history.</div>
+            </div>
+            <div class="separator"></div>
+            <div class="section-title">Document Info</div>
+            <div id="docInfo" class="muted small" style="padding: 8px 0;">
+              Changes are automatically tracked via Git. Every save creates a version you can review.
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -1029,11 +1047,14 @@ INDEX_HTML = r"""
     }
 
     // Document / Design Docs functions
+    let docEditMode = false;
+    let currentDocHistory = [];
+
     async function loadDocList() {
       const docs = await api('/api/docs/list');
       const select = document.getElementById('docSelect');
       const current = select.value || docs[0]?.filename || '';
-      select.innerHTML = docs.map(d => `<option value="${escapeAttr(d.filename)}" ${d.filename === current ? 'selected' : ''}>${escapeHtml(d.filename)}</option>`).join('');
+      select.innerHTML = docs.map(d => `<option value="${escapeAttr(d.filename)}" ${d.filename === current ? 'selected' : ''}>${escapeHtml(d.filename.replace('.md', ''))}</option>`).join('');
       if (select.value) loadDoc();
     }
 
@@ -1042,39 +1063,117 @@ INDEX_HTML = r"""
       if (!filename) return;
       const doc = await api(`/api/docs/read?filename=${encodeURIComponent(filename)}`);
       document.getElementById('docEditor').value = doc.content;
+      document.getElementById('docTitleLabel').textContent = filename.replace('.md', '');
+      document.getElementById('docVersionBadge').textContent = 'Latest';
       renderDocPreview();
+      await loadDocHistory(filename);
+    }
+
+    function toggleDocEditMode() {
+      docEditMode = !docEditMode;
+      const editorPanel = document.getElementById('docEditorPanel');
+      const viewerPanel = document.getElementById('docViewerPanel');
+      const saveBtn = document.getElementById('docSaveBtn');
+      const toggleBtn = document.getElementById('docEditToggle');
+      
+      if (docEditMode) {
+        editorPanel.style.display = 'flex';
+        viewerPanel.style.flex = '1';
+        saveBtn.style.display = 'inline-block';
+        toggleBtn.textContent = 'View';
+        toggleBtn.classList.add('primary');
+        renderDocPreview();
+      } else {
+        editorPanel.style.display = 'none';
+        viewerPanel.style.flex = '1';
+        saveBtn.style.display = 'none';
+        toggleBtn.textContent = 'Edit';
+        toggleBtn.classList.remove('primary');
+      }
     }
 
     function renderDocPreview() {
       const markdown = document.getElementById('docEditor').value;
       const preview = document.getElementById('docPreview');
-      // Simple markdown-to-HTML renderer
+      
+      // Enhanced markdown-to-HTML renderer
       let html = markdown
-        .replace(/^# (.*$)/gim, '<h1>$1</h1>')
-        .replace(/^## (.*$)/gim, '<h2>$1</h2>')
-        .replace(/^### (.*$)/gim, '<h3>$1</h3>')
-        .replace(/^---+/gim, '<hr>')
-        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+        .replace(/^# (.*$)/gim, '<h1 style="font-size: 24px; border-bottom: 2px solid var(--accent); padding-bottom: 8px; margin-bottom: 16px; color: var(--text);">$1</h1>')
+        .replace(/^## (.*$)/gim, '<h2 style="font-size: 18px; margin-top: 24px; margin-bottom: 12px; color: var(--accent);">$1</h2>')
+        .replace(/^### (.*$)/gim, '<h3 style="font-size: 15px; margin-top: 18px; margin-bottom: 8px; color: var(--muted);">$1</h3>')
+        .replace(/^---+/gim, '<hr style="border: none; border-top: 1px solid var(--border); margin: 20px 0;">')
+        .replace(/\*\*(.*?)\*\*/g, '<strong style="color: var(--accent-2);">$1</strong>')
         .replace(/\*(.*?)\*/g, '<em>$1</em>')
-        .replace(/^\* (.*$)/gim, '<li>$1</li>')
+        .replace(/`([^`]+)`/g, '<code style="background: rgba(110,168,254,0.1); padding: 2px 6px; border-radius: 4px; font-family: monospace; font-size: 12px;">$1</code>')
+        .replace(/^\* (.*$)/gim, '<li style="margin-left: 20px; margin-bottom: 4px;">$1</li>')
+        .replace(/^\d+\.\s(.*$)/gim, '<li style="margin-left: 20px; margin-bottom: 4px; list-style-type: decimal;">$1</li>')
         .replace(/^\|(.+)\|$/gim, (match, p1) => {
-          const cells = p1.split('|').map(c => `<td>${c.trim()}</td>`).join('');
+          const cells = p1.split('|').map(c => `<td style="border: 1px solid var(--border); padding: 8px; text-align: left;">${c.trim()}</td>`).join('');
           return `<tr>${cells}</tr>`;
         })
-        .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>')
+        .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" style="color: var(--accent); text-decoration: none;">$1</a>')
         .replace(/\n/g, '<br>');
+      
       // Wrap consecutive li in ul
-      html = html.replace(/(<li>.*<\/li>)(?:<br>)+/g, '<ul>$1</ul>');
+      html = html.replace(/(<li[^>]*>.*<\/li>)(?:<br>)+/g, '<ul style="margin-bottom: 12px;">$1</ul>');
       // Wrap consecutive tr in table
-      html = html.replace(/(<tr>.*<\/tr>)(?:<br>)+/g, '<table class="compare-table">$1</table>');
+      html = html.replace(/(<tr>.*<\/tr>)(?:<br>)+/g, '<table style="width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13px;">$1</table>');
+      
+      // Style tables
+      html = html.replace(/<table/g, '<table style="width: 100%; border-collapse: collapse; margin: 12px 0;"');
+      html = html.replace(/<td>/g, '<td style="border: 1px solid var(--border); padding: 8px;">');
+      
       preview.innerHTML = html;
+    }
+
+    async function loadDocHistory(filename) {
+      try {
+        const data = await api(`/api/docs/history?filename=${encodeURIComponent(filename)}`);
+        currentDocHistory = data.history || [];
+        const container = document.getElementById('docHistory');
+        
+        if (currentDocHistory.length === 0) {
+          container.innerHTML = '<div class="empty">No history yet. Save the document to create the first version.</div>';
+          return;
+        }
+        
+        container.innerHTML = currentDocHistory.map((h, i) => `
+          <div class="nav-chip ${i === 0 ? 'active' : ''}" onclick="loadDocVersion('${escapeAttr(h.hash)}', ${i})" style="padding: 8px 10px; font-size: 11px;">
+            <div style="font-weight: 600; margin-bottom: 2px;">${escapeHtml(h.message)}</div>
+            <div class="muted" style="font-size: 10px;">${escapeHtml(h.hash)} • ${escapeHtml(h.date)}</div>
+          </div>
+        `).join('');
+      } catch (e) {
+        document.getElementById('docHistory').innerHTML = '<div class="empty">History not available.</div>';
+      }
+    }
+
+    async function loadDocVersion(commitHash, index) {
+      const filename = document.getElementById('docSelect').value;
+      if (!filename || !commitHash) return;
+      
+      setStatus('Loading version...');
+      try {
+        const data = await api(`/api/docs/version?filename=${encodeURIComponent(filename)}&commit=${encodeURIComponent(commitHash)}`);
+        document.getElementById('docEditor').value = data.content;
+        document.getElementById('docVersionBadge').textContent = `Version: ${commitHash}`;
+        renderDocPreview();
+        
+        // Highlight selected version
+        const chips = document.getElementById('docHistory').querySelectorAll('.nav-chip');
+        chips.forEach((c, i) => c.classList.toggle('active', i === index));
+        
+        setStatus('Loaded version ' + commitHash);
+      } catch (e) {
+        setStatus('Failed to load version');
+      }
     }
 
     async function saveDoc() {
       const filename = document.getElementById('docSelect').value;
       const content = document.getElementById('docEditor').value;
       if (!filename) return;
-      const message = prompt('Describe this change (commit message):', `Updated ${filename}`);
+      const message = prompt('Describe this change (commit message):', `Updated ${filename.replace('.md', '')}`);
       if (message === null) return;
       setStatus('Saving doc...');
       await api('/api/docs/save', {
@@ -1082,6 +1181,9 @@ INDEX_HTML = r"""
         body: JSON.stringify({ filename, content, message })
       });
       setStatus('Saved & committed');
+      // Reload history
+      await loadDocHistory(filename);
+      document.getElementById('docVersionBadge').textContent = 'Latest';
     }
 
     async function createNewDoc() {
@@ -1096,9 +1198,6 @@ INDEX_HTML = r"""
       document.getElementById('docSelect').value = name;
       loadDoc();
     }
-
-    // Wire up live preview
-    document.getElementById('docEditor')?.addEventListener('input', renderDocPreview);
 
     async function loadProject() {
       state.project = await api('/api/project');
@@ -1129,7 +1228,23 @@ INDEX_HTML = r"""
       document.getElementById('compareView').classList.toggle('active', mode === 'compare');
       document.getElementById('manageView').classList.toggle('active', mode === 'manage');
       document.getElementById('docsView').classList.toggle('active', mode === 'docs');
-      if (mode === 'docs') loadDocList();
+      
+      // Update right panel based on mode
+      const rightStandard = document.getElementById('rightPanelStandard');
+      const rightDocs = document.getElementById('rightPanelDocs');
+      const rightTitle = document.getElementById('rightPanelTitle');
+      
+      if (mode === 'docs') {
+        rightStandard.style.display = 'none';
+        rightDocs.style.display = 'block';
+        rightTitle.textContent = 'Version History';
+        loadDocList();
+      } else {
+        rightStandard.style.display = 'block';
+        rightDocs.style.display = 'none';
+        rightTitle.textContent = 'Navigation & Tools';
+      }
+      
       renderAll();
     }
 
@@ -2472,6 +2587,71 @@ async def api_save_doc(request: Request):
         pass  # Git may fail if not configured, that's okay
 
     return {"ok": True, "filename": filename}
+
+
+@app.get("/api/docs/history")
+async def api_doc_history(filename: str):
+    """Get git commit history for a specific document."""
+    design_dir = APP_ROOT / "design"
+    file_path = design_dir / filename
+    
+    # Security check
+    try:
+        file_path.resolve().relative_to(design_dir.resolve())
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["git", "log", "--follow", "--format=%H|%ai|%s", "--", str(file_path)],
+            cwd=str(APP_ROOT),
+            capture_output=True,
+            text=True,
+        )
+        history = []
+        if result.returncode == 0 and result.stdout:
+            for line in result.stdout.strip().split("\n"):
+                if "|" in line:
+                    parts = line.split("|", 2)
+                    if len(parts) == 3:
+                        hash_, date, message = parts
+                        history.append({
+                            "hash": hash_[:7],
+                            "date": date.split(" ")[0] if " " in date else date,
+                            "message": message,
+                        })
+        return {"filename": filename, "history": history}
+    except Exception as e:
+        return {"filename": filename, "history": [], "error": str(e)}
+
+
+@app.get("/api/docs/version")
+async def api_doc_version(filename: str, commit: str):
+    """Get a specific version of a document from git history."""
+    design_dir = APP_ROOT / "design"
+    file_path = design_dir / filename
+    
+    # Security check
+    try:
+        file_path.resolve().relative_to(design_dir.resolve())
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["git", "show", f"{commit}:{file_path.relative_to(APP_ROOT)}"],
+            cwd=str(APP_ROOT),
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            return {"filename": filename, "commit": commit, "content": result.stdout}
+        else:
+            return {"filename": filename, "commit": commit, "content": "", "error": result.stderr}
+    except Exception as e:
+        return {"filename": filename, "commit": commit, "content": "", "error": str(e)}
 
 
 if __name__ == "__main__":
