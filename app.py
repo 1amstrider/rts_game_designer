@@ -71,6 +71,7 @@ def default_project_state():
         "categories": ["Identity", "Combat Stats", "Defense", "Target Types", "Range & AoE", "Abilities", "Resource", "Economy", "Notes", "Custom"],
         "roles": [],
         "gods": [],
+        "kingdoms": ["Humans", "Kingdom of Ores", "Kingdom of Magic", "Kingdom of Evil", "Kingdom of the Ancients", "Kingdom of the Beasts", "Kingdom of the Divines"],
         "fields": [],
         "heroes": [],
     }
@@ -105,6 +106,7 @@ def seed_from_legacy_columns(project_dir: Path):
         {
             "id": str(uuid.uuid4()),
             "Age": "Mythic Age",
+            "Kingdom": "Kingdom of the Divines",
             "Hero Name": "Paladin",
             "Portrait": "",
             "Extra Images": [],
@@ -131,6 +133,7 @@ def seed_from_legacy_columns(project_dir: Path):
         {
             "id": str(uuid.uuid4()),
             "Age": "Mythic Age",
+            "Kingdom": "Kingdom of Magic",
             "Hero Name": "Sword Master",
             "Portrait": "",
             "Extra Images": [],
@@ -187,14 +190,19 @@ def import_existing_workbook(project_dir: Path):
         for header in headers
         if header not in {"Portrait", "Extra Images", "ID"}
     ]
+    # Ensure Kingdom field always exists
+    if not any(f.get("name") == "Kingdom" for f in fields):
+        fields.insert(0, {"name": "Kingdom", "category": "Identity", "type": "text"})
     heroes = []
     age_values = []
     for row in rows[1:]:
         values = {headers[i]: normalize_text(row[i]) if i < len(row) else "" for i in range(len(headers))}
         if not any(values.values()):
             continue
-        hero = {"id": str(uuid.uuid4()), "Portrait": "", "Extra Images": []}
+        hero = {"id": str(uuid.uuid4()), "Portrait": "", "Extra Images": [], "Kingdom": ""}
         hero.update(values)
+        if not hero.get("Kingdom"):
+            hero["Kingdom"] = "Humans"
         if values.get("Age"):
             age_values.append(values["Age"])
         heroes.append(hero)
@@ -215,7 +223,7 @@ def categorize_field(name: str) -> str:
         "Cost", "Population", "Rage (Required to cast the Ultimate Skill)",
         "Dodge", "Parry", "Area of Effect",
     }
-    identity = {"Age", "Hero Name", "Temple", "God", "Role", "Unit Type", "Goddess", "Temple"}
+    identity = {"Age", "Hero Name", "Temple", "God", "Role", "Unit Type", "Goddess", "Temple", "Kingdom"}
     abilities = {"Passive", "Abilities", "Ultimate Skill", "Special Skills", "Passive Abilities", "Ultimate Ability"}
     media = {"Portrait", "Extra Images"}
     support = {"Healing", "Healing Ability"}
@@ -268,23 +276,89 @@ def read_state(project_dir: Path):
             "category": normalize_text(row[1]) or "Custom",
             "type": normalize_text(row[2]) or "text",
         })
+    # Ensure Kingdom field always exists
+    if not any(f.get("name") == "Kingdom" for f in fields):
+        fields.insert(0, {"name": "Kingdom", "category": "Identity", "type": "text"})
 
     ages = [normalize_text(row[0]) for row in ages_ws.iter_rows(min_row=2, values_only=True) if normalize_text(row[0])]
+
+    # Infer fields from heroes if fields list is empty (backward compatibility)
+    if not fields and heroes:
+        inferred = set()
+        for hero in heroes:
+            inferred.update(hero.keys())
+        fields = [
+            {"name": "ID", "category": "System", "type": "text"},
+            {"name": "Portrait", "category": "Media", "type": "image"},
+            {"name": "Extra Images", "category": "Media", "type": "images"},
+        ]
+        for name in sorted(inferred):
+            if name not in {"id", "Portrait", "Extra Images", "Kingdom"}:
+                fields.append({
+                    "name": name,
+                    "category": categorize_field(name),
+                    "type": "textarea" if name in {"Passive", "Abilities", "Ultimate Skill", "Notes"} else "text",
+                })
+        # Ensure Kingdom is included
+        if not any(f.get("name") == "Kingdom" for f in fields):
+            fields.insert(0, {"name": "Kingdom", "category": "Identity", "type": "text"})
+
+    # Read kingdoms
+    kingdoms = []
+    if "Kingdoms" in wb.sheetnames:
+        kingdoms_ws = wb["Kingdoms"]
+        kingdoms = [normalize_text(row[0]) for row in kingdoms_ws.iter_rows(min_row=2, values_only=True) if normalize_text(row[0])]
+    if not kingdoms:
+        kingdoms = ["Humans", "Kingdom of Ores", "Kingdom of Magic", "Kingdom of Evil", "Kingdom of the Ancients", "Kingdom of the Beasts", "Kingdom of the Divines"]
+
+    # Read heroes: prefer per-kingdom sheets (K_*), fallback to Heroes sheet
     heroes = []
-    for row in heroes_ws.iter_rows(min_row=2, values_only=True):
-        if not row[0]:
-            continue
-        hero = {
-            "id": normalize_text(row[0]),
-            "Age": normalize_text(row[1]),
-            "Hero Name": normalize_text(row[2]),
-            "Portrait": normalize_text(row[3]),
-            "Extra Images": json.loads(row[4]) if row[4] else [],
-        }
-        data = json.loads(row[5]) if row[5] else {}
-        for key, value in data.items():
-            hero[key] = value
-        heroes.append(hero)
+    kingdom_sheets = [s for s in wb.sheetnames if s.startswith("K_")]
+    if kingdom_sheets:
+        for sheet_name in kingdom_sheets:
+            ws = wb[sheet_name]
+            kingdom_name = sheet_name[2:].replace("_", " ")
+            # Try to find the actual kingdom name from the sheet header if available
+            if ws.max_row >= 1:
+                first_row = list(ws.iter_rows(min_row=1, max_row=1, values_only=True))
+                if first_row and len(first_row[0]) >= 7 and first_row[0][6]:
+                    header = first_row[0]
+                    # Check if there's a Kingdom column header
+                    pass
+            for row in ws.iter_rows(min_row=2, values_only=True):
+                if not row[0]:
+                    continue
+                hero = {
+                    "id": normalize_text(row[0]),
+                    "Age": normalize_text(row[1]),
+                    "Hero Name": normalize_text(row[2]),
+                    "Portrait": normalize_text(row[3]),
+                    "Extra Images": json.loads(row[4]) if row[4] else [],
+                }
+                data = json.loads(row[5]) if row[5] else {}
+                for key, value in data.items():
+                    hero[key] = value
+                if not hero.get("Kingdom"):
+                    hero["Kingdom"] = kingdom_name
+                heroes.append(hero)
+    else:
+        # Fallback: read from Heroes sheet (backward compatibility)
+        for row in heroes_ws.iter_rows(min_row=2, values_only=True):
+            if not row[0]:
+                continue
+            hero = {
+                "id": normalize_text(row[0]),
+                "Age": normalize_text(row[1]),
+                "Hero Name": normalize_text(row[2]),
+                "Portrait": normalize_text(row[3]),
+                "Extra Images": json.loads(row[4]) if row[4] else [],
+            }
+            data = json.loads(row[5]) if row[5] else {}
+            for key, value in data.items():
+                hero[key] = value
+            if not hero.get("Kingdom"):
+                hero["Kingdom"] = kingdoms[0] if kingdoms else "Humans"
+            heroes.append(hero)
 
     categories = []
     if "Categories" in wb.sheetnames:
@@ -307,7 +381,7 @@ def read_state(project_dir: Path):
     if not gods:
         gods = sorted(set(h.get("God", "") for h in heroes if h.get("God") and h.get("God") != "None")) or []
 
-    return {"project_dir": str(project_dir), "fields": fields or [], "ages": ages or ["Unassigned"], "categories": categories, "roles": roles, "gods": gods, "heroes": heroes}
+    return {"project_dir": str(project_dir), "fields": fields or [], "ages": ages or ["Unassigned"], "categories": categories, "roles": roles, "gods": gods, "kingdoms": kingdoms, "heroes": heroes}
 
 
 def write_state(project_dir: Path, state):
@@ -342,9 +416,37 @@ def write_state(project_dir: Path, state):
     for god in state.get("gods", []):
         gods_ws.append([god])
 
+    # Write Kingdoms sheet
+    kingdoms_ws = wb.create_sheet("Kingdoms")
+    kingdoms_ws.append(["Kingdom"])
+    for kingdom in state.get("kingdoms", []):
+        kingdoms_ws.append([kingdom])
+
+    # Write per-kingdom hero sheets
+    kingdoms = state.get("kingdoms", ["Humans"])
+    protected = {"id", "Age", "Hero Name", "Portrait", "Extra Images"}
+    for kingdom in kingdoms:
+        sheet_name = "K_" + kingdom.replace(" ", "_")
+        # Ensure valid Excel sheet name (max 31 chars)
+        if len(sheet_name) > 31:
+            sheet_name = sheet_name[:31]
+        ws = wb.create_sheet(sheet_name)
+        ws.append(["id", "Age", "Hero Name", "Portrait", "Extra Images", "Data JSON"])
+        for hero in state["heroes"]:
+            if hero.get("Kingdom") == kingdom:
+                payload = {k: v for k, v in hero.items() if k not in protected}
+                ws.append([
+                    hero.get("id", str(uuid.uuid4())),
+                    hero.get("Age", ""),
+                    hero.get("Hero Name", ""),
+                    hero.get("Portrait", ""),
+                    json.dumps(hero.get("Extra Images", []), ensure_ascii=False),
+                    json.dumps(payload, ensure_ascii=False),
+                ])
+
+    # Also write a unified Heroes sheet for backward compatibility
     heroes_ws = wb.create_sheet("Heroes")
     heroes_ws.append(["id", "Age", "Hero Name", "Portrait", "Extra Images", "Data JSON"])
-    protected = {"id", "Age", "Hero Name", "Portrait", "Extra Images"}
     for hero in state["heroes"]:
         payload = {k: v for k, v in hero.items() if k not in protected}
         heroes_ws.append([
@@ -701,6 +803,7 @@ INDEX_HTML = r"""
         <button class="btn" onclick="switchMode('editor')">Editor</button>
         <button class="btn" onclick="switchMode('compare')">Compare Heroes</button>
         <button class="btn" onclick="switchMode('manage')">Manage Schema</button>
+        <button class="btn" onclick="switchMode('docs')">Design Docs</button>
       </div>
       <div class="toolbar">
         <div class="status" id="saveStatus">Ready</div>
@@ -715,6 +818,8 @@ INDEX_HTML = r"""
         <div class="panel-header"><strong>Ages & Heroes</strong><button class="btn" onclick="createHero()">+ Hero</button></div>
         <div class="panel-body">
           <div class="controls">
+            <label class="small muted">Kingdom</label>
+            <select id="kingdomFilter" class="select" onchange="selectKingdom(this.value)"></select>
             <input id="searchBox" class="input" placeholder="Search hero..." oninput="renderAll()" />
             <div class="row">
               <select id="typeFilter" class="select grow" onchange="renderAll()"></select>
@@ -789,6 +894,16 @@ INDEX_HTML = r"""
           </details>
 
           <details class="field-card" open style="margin-top: 12px;">
+            <summary>Kingdoms</summary>
+            <div class="panel-body">
+              <div class="row wrap" style="margin-bottom: 8px;">
+                <button class="btn primary" onclick="createKingdom()">+ Kingdom</button>
+              </div>
+              <div id="kingdomListContent"></div>
+            </div>
+          </details>
+
+          <details class="field-card" open style="margin-top: 12px;">
             <summary>Fields</summary>
             <div class="panel-body">
               <div class="row wrap" style="margin-bottom: 8px;">
@@ -797,6 +912,31 @@ INDEX_HTML = r"""
               <div id="schemaContent"></div>
             </div>
           </details>
+        </div>
+
+        <div id="docsView" class="manage-view panel-body">
+          <div class="row wrap" style="justify-content: space-between; margin-bottom: 12px;">
+            <div>
+              <strong>Design Documents</strong>
+              <div class="muted small">Edit game design docs. All changes are versioned.</div>
+            </div>
+            <div class="row wrap">
+              <button class="btn" onclick="createNewDoc()">+ New Doc</button>
+              <button class="btn primary" onclick="saveDoc()">Save & Commit</button>
+            </div>
+          </div>
+          <div class="row" style="gap: 12px; align-items: stretch; height: calc(100% - 60px);">
+            <div style="flex: 1; display: flex; flex-direction: column; gap: 8px;">
+              <label class="small muted">Document</label>
+              <select id="docSelect" class="select" onchange="loadDoc()"></select>
+              <label class="small muted">Content (Markdown)</label>
+              <textarea id="docEditor" class="textarea" style="flex: 1; min-height: 400px; font-family: monospace; font-size: 13px;" placeholder="# Title\n\nWrite your design document here..."></textarea>
+            </div>
+            <div style="flex: 1; display: flex; flex-direction: column; gap: 8px;">
+              <label class="small muted">Preview</label>
+              <div id="docPreview" class="panel-body" style="flex: 1; overflow: auto; background: var(--panel-2); border-radius: 10px; padding: 16px;"></div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -816,6 +956,7 @@ INDEX_HTML = r"""
   <script>
     const state = {
       project: null,
+      selectedKingdom: null,
       selectedAge: null,
       selectedHeroId: null,
       mode: 'editor',
@@ -853,9 +994,87 @@ INDEX_HTML = r"""
       state.periodicTimer = setInterval(periodicSave, 600000);
     }
 
+    // Document / Design Docs functions
+    async function loadDocList() {
+      const docs = await api('/api/docs/list');
+      const select = document.getElementById('docSelect');
+      const current = select.value || docs[0]?.filename || '';
+      select.innerHTML = docs.map(d => `<option value="${escapeAttr(d.filename)}" ${d.filename === current ? 'selected' : ''}>${escapeHtml(d.filename)}</option>`).join('');
+      if (select.value) loadDoc();
+    }
+
+    async function loadDoc() {
+      const filename = document.getElementById('docSelect').value;
+      if (!filename) return;
+      const doc = await api(`/api/docs/read?filename=${encodeURIComponent(filename)}`);
+      document.getElementById('docEditor').value = doc.content;
+      renderDocPreview();
+    }
+
+    function renderDocPreview() {
+      const markdown = document.getElementById('docEditor').value;
+      const preview = document.getElementById('docPreview');
+      // Simple markdown-to-HTML renderer
+      let html = markdown
+        .replace(/^# (.*$)/gim, '<h1>$1</h1>')
+        .replace(/^## (.*$)/gim, '<h2>$1</h2>')
+        .replace(/^### (.*$)/gim, '<h3>$1</h3>')
+        .replace(/^---+/gim, '<hr>')
+        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*(.*?)\*/g, '<em>$1</em>')
+        .replace(/^\* (.*$)/gim, '<li>$1</li>')
+        .replace(/^\|(.+)\|$/gim, (match, p1) => {
+          const cells = p1.split('|').map(c => `<td>${c.trim()}</td>`).join('');
+          return `<tr>${cells}</tr>`;
+        })
+        .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>')
+        .replace(/\n/g, '<br>');
+      // Wrap consecutive li in ul
+      html = html.replace(/(<li>.*<\/li>)(?:<br>)+/g, '<ul>$1</ul>');
+      // Wrap consecutive tr in table
+      html = html.replace(/(<tr>.*<\/tr>)(?:<br>)+/g, '<table class="compare-table">$1</table>');
+      preview.innerHTML = html;
+    }
+
+    async function saveDoc() {
+      const filename = document.getElementById('docSelect').value;
+      const content = document.getElementById('docEditor').value;
+      if (!filename) return;
+      const message = prompt('Describe this change (commit message):', `Updated ${filename}`);
+      if (message === null) return;
+      setStatus('Saving doc...');
+      await api('/api/docs/save', {
+        method: 'POST',
+        body: JSON.stringify({ filename, content, message })
+      });
+      setStatus('Saved & committed');
+    }
+
+    async function createNewDoc() {
+      const name = prompt('New document name (e.g., COMBAT.md):', 'NEW_DESIGN.md');
+      if (!name) return;
+      const content = `# ${name.replace('.md', '')}\n\nAdd your design notes here.`;
+      await api('/api/docs/save', {
+        method: 'POST',
+        body: JSON.stringify({ filename: name, content, message: `Created ${name}` })
+      });
+      await loadDocList();
+      document.getElementById('docSelect').value = name;
+      loadDoc();
+    }
+
+    // Wire up live preview
+    document.getElementById('docEditor')?.addEventListener('input', renderDocPreview);
+
     async function loadProject() {
       state.project = await api('/api/project');
       if (!state.project.ages.length) state.project.ages = ['Unassigned'];
+      if (!state.project.kingdoms || !state.project.kingdoms.length) {
+        state.project.kingdoms = ['Humans', 'Kingdom of Ores', 'Kingdom of Magic', 'Kingdom of Evil', 'Kingdom of the Ancients', 'Kingdom of the Beasts', 'Kingdom of the Divines'];
+      }
+      state.selectedKingdom = state.selectedKingdom && state.project.kingdoms.includes(state.selectedKingdom)
+        ? state.selectedKingdom
+        : state.project.kingdoms[0];
       state.selectedAge = state.selectedAge && state.project.ages.includes(state.selectedAge)
         ? state.selectedAge
         : state.project.ages[0];
@@ -872,6 +1091,8 @@ INDEX_HTML = r"""
       document.getElementById('editorView').style.display = mode === 'editor' ? 'grid' : 'none';
       document.getElementById('compareView').classList.toggle('active', mode === 'compare');
       document.getElementById('manageView').classList.toggle('active', mode === 'manage');
+      document.getElementById('docsView').classList.toggle('active', mode === 'docs');
+      if (mode === 'docs') loadDocList();
       renderAll();
     }
 
@@ -896,12 +1117,29 @@ INDEX_HTML = r"""
     function filteredHeroes(byAge = true) {
       const search = document.getElementById('searchBox')?.value?.trim().toLowerCase() || '';
       return state.project.heroes.filter(hero => {
+        const inKingdom = !state.selectedKingdom || hero.Kingdom === state.selectedKingdom;
         const inAge = !byAge || !state.selectedAge || hero.Age === state.selectedAge;
         const haystack = [hero['Hero Name'], hero.God, hero.Temple, hero.Role, hero['Unit Type'], hero.Passive, hero.Abilities]
           .filter(Boolean).join(' ').toLowerCase();
         const matchesSearch = !search || haystack.includes(search);
-        return inAge && matchesSearch;
+        return inKingdom && inAge && matchesSearch;
       });
+    }
+
+    function populateKingdomFilter() {
+      const select = document.getElementById('kingdomFilter');
+      if (!select || !state.project) return;
+      const current = state.selectedKingdom || state.project.kingdoms[0] || '';
+      select.innerHTML = state.project.kingdoms.map(k => `<option value="${escapeAttr(k)}" ${k === current ? 'selected' : ''}>${escapeHtml(k)}</option>`).join('');
+    }
+
+    function selectKingdom(kingdom) {
+      state.selectedKingdom = kingdom;
+      const heroes = filteredHeroes(true);
+      if (heroes.length && !heroes.some(h => h.id === state.selectedHeroId)) {
+        state.selectedHeroId = heroes[0]?.id || null;
+      }
+      renderAll();
     }
 
     function populateTypeFilter() {
@@ -914,6 +1152,7 @@ INDEX_HTML = r"""
 
     function renderAll() {
       if (!state.project) return;
+      populateKingdomFilter();
       populateTypeFilter();
       renderAges();
       renderHeroes();
@@ -923,13 +1162,14 @@ INDEX_HTML = r"""
       renderSchema();
       renderCategories();
       renderRoles();
+      renderKingdoms();
       if (state.mode === 'compare') runCompare();
     }
 
     function renderAges() {
       const ageList = document.getElementById('ageList');
       ageList.innerHTML = state.project.ages.map(age => {
-        const count = state.project.heroes.filter(hero => hero.Age === age).length;
+        const count = state.project.heroes.filter(hero => hero.Age === age && (!state.selectedKingdom || hero.Kingdom === state.selectedKingdom)).length;
         return `<div class="age-row ${age === state.selectedAge ? 'active' : ''}" onclick="selectAge(${js(age)})">
           <div class="row" style="justify-content: space-between;">
             <strong>${escapeHtml(age)}</strong>
@@ -951,7 +1191,7 @@ INDEX_HTML = r"""
         return `<div class="hero-card ${hero.id === state.selectedHeroId ? 'active' : ''}" onclick="selectHero(${js(hero.id)})">
           <div class="hero-card-title">${escapeHtml(hero['Hero Name'] || 'Unnamed Hero')}</div>
           <div class="small muted">${escapeHtml(type)}</div>
-          <div class="small muted">${escapeHtml(hero.God || hero.Age || '')}</div>
+          <div class="small muted">${escapeHtml(hero.Kingdom || '')} &middot; ${escapeHtml(hero.God || hero.Age || '')}</div>
         </div>`;
       }).join('');
     }
@@ -967,7 +1207,7 @@ INDEX_HTML = r"""
       }
 
       const groups = fieldGroups();
-      const coreFields = ['Hero Name', 'Age', 'Temple', 'God', 'Role', 'Unit Type'];
+      const coreFields = ['Hero Name', 'Kingdom', 'Age', 'Temple', 'God', 'Role', 'Unit Type'];
       const metaGrid = coreFields.filter(name => getFieldDefs().some(f => f.name === name)).map(name => renderInput(hero, getFieldDefs().find(f => f.name === name), true)).join('');
       const categoryMarkup = Object.entries(groups).map(([category, fields]) => {
         const inner = fields
@@ -1013,6 +1253,15 @@ INDEX_HTML = r"""
       const value = hero[name] ?? '';
       const label = `<label class="small muted">${escapeHtml(name)}</label>`;
       const wide = field.type === 'textarea' ? 'wide' : '';
+      if (name === 'Kingdom') {
+        const kingdoms = state.project.kingdoms || [];
+        return `<div class="field ${wide}">${label}<div class="row" style="gap:6px">
+          <select class="select" style="flex:1" onchange="updateField(${js(hero.id)}, ${js(name)}, this.value)">
+            ${kingdoms.map(k => `<option value="${escapeAttr(k)}" ${k === value ? 'selected' : ''}>${escapeHtml(k)}</option>`).join('')}
+          </select>
+          <button class="btn btn--small btn--flat" onclick="manageKingdoms()" title="Manage Kingdoms">...</button>
+        </div></div>`;
+      }
       if (name === 'Age') {
         return `<div class="field ${wide}">${label}<select class="select" onchange="updateField(${js(hero.id)}, ${js(name)}, this.value)">
           ${state.project.ages.map(age => `<option value="${escapeAttr(age)}" ${age === value ? 'selected' : ''}>${escapeHtml(age)}</option>`).join('')}
@@ -1060,7 +1309,7 @@ INDEX_HTML = r"""
         return `<div class="compare-chip active" onclick="toggleCompare(${js(hero.id)})">
           <div class="row" style="justify-content: space-between; gap: 6px;">
             <span>${escapeHtml(hero['Hero Name'] || 'Unnamed Hero')}</span>
-            <span class="badge">${escapeHtml(hero.Age || 'Age')}</span>
+            <span class="badge">${escapeHtml(hero.Kingdom || hero.Age || 'Age')}</span>
           </div>
         </div>`;
       }).join('');
@@ -1222,6 +1471,78 @@ INDEX_HTML = r"""
       }
     }
 
+    function renderKingdoms() {
+      const container = document.getElementById('kingdomListContent');
+      const kingdoms = state.project?.kingdoms || [];
+      const heroes = state.project?.heroes || [];
+      container.innerHTML = kingdoms.map(kingdom => {
+        const count = heroes.filter(h => h.Kingdom === kingdom).length;
+        return `<div class="field-card">
+          <div class="field-grid">
+            <div class="field">
+              <label class="small muted">Kingdom Name</label>
+              <input class="input" value="${escapeAttr(kingdom)}" onchange="renameKingdom(${js(kingdom)}, this.value)" />
+            </div>
+            <div class="field">
+              <label class="small muted">Heroes in this kingdom</label>
+              <div class="input" style="opacity:0.6;cursor:default;">${count} hero${count !== 1 ? 'es' : ''}</div>
+            </div>
+            <div class="field" style="align-content:end;">
+              <button class="btn danger" onclick="deleteKingdom(${js(kingdom)})">Delete</button>
+            </div>
+          </div>
+        </div>`;
+      }).join('');
+    }
+
+    async function createKingdom() {
+      const name = prompt('Kingdom name:', 'New Kingdom');
+      if (!name) return;
+      const data = await api('/api/kingdom', { method: 'POST', body: JSON.stringify({ name }) });
+      state.project.kingdoms = data.kingdoms;
+      renderAll();
+      queueAutosave();
+    }
+
+    async function renameKingdom(oldName, newName) {
+      if (!newName || newName === oldName) return;
+      const data = await api(`/api/kingdom/${encodeURIComponent(oldName)}`, { method: 'PUT', body: JSON.stringify({ name: newName }) });
+      state.project.kingdoms = data.kingdoms;
+      state.project.heroes.forEach(h => { if (h.Kingdom === oldName) h.Kingdom = newName; });
+      renderAll();
+      queueAutosave();
+    }
+
+    async function deleteKingdom(name) {
+      const heroes = (state.project?.heroes || []).filter(h => h.Kingdom === name);
+      const msg = heroes.length > 0
+        ? `Delete kingdom "${name}"? ${heroes.length} hero(s) will be moved to "${state.project.kingdoms[0] || 'Humans'}".`
+        : `Delete kingdom "${name}"?`;
+      if (!confirm(msg)) return;
+      const data = await api(`/api/kingdom/${encodeURIComponent(name)}`, { method: 'DELETE' });
+      state.project.kingdoms = data.kingdoms;
+      state.project.heroes.forEach(h => { if (h.Kingdom === name) h.Kingdom = state.project.kingdoms[0] || 'Humans'; });
+      renderAll();
+      queueAutosave();
+    }
+
+    function manageKingdoms() {
+      const kingdoms = state.project.kingdoms || [];
+      const list = kingdoms.length > 0 ? kingdoms.join(', ') : '(none)';
+      const action = prompt(`Kingdoms:\n${list}\n\nOptions:\n• Type a kingdom name to add it\n• To rename: old name = new name\n• To delete: type just the name (will remove)\n\nEnter kingdom name:`, '');
+      if (action === null || action === '') return;
+      if (action.includes('=')) {
+        const [oldName, newName] = action.split('=').map(s => s.trim());
+        if (!oldName || !newName) return;
+        renameKingdom(oldName, newName);
+      } else if (kingdoms.includes(action)) {
+        const rename = prompt(`Delete kingdom "${action}"? (type yes to confirm)`, '');
+        if (rename === 'yes') deleteKingdom(action);
+      } else {
+        createKingdom(action);
+      }
+    }
+
     function manageGods() {
       const gods = state.project.gods || [];
       const list = gods.length > 0 ? gods.join(', ') : '(none)';
@@ -1279,7 +1600,7 @@ INDEX_HTML = r"""
       const heroHeader = data.heroes.map(hero => `
         <th>
           <div>${escapeHtml(hero['Hero Name'] || 'Unnamed Hero')}</div>
-          <div class="small muted">${escapeHtml(hero.Age || '')} &middot; ${escapeHtml(hero['Unit Type'] || hero.Role || 'Unknown')}</div>
+          <div class="small muted">${escapeHtml(hero.Kingdom || '')} &middot; ${escapeHtml(hero.Age || '')} &middot; ${escapeHtml(hero['Unit Type'] || hero.Role || 'Unknown')}</div>
           <div style="margin-top:8px;"><img src="${imgUrl(hero.Portrait)}" alt="Portrait" style="width:120px;height:150px;object-fit:cover;border-radius:12px;border:1px solid var(--border);" /></div>
         </th>`).join('');
       const rows = data.rows.map(row => `
@@ -1344,7 +1665,7 @@ INDEX_HTML = r"""
     async function createHero() {
       const name = prompt('Hero name:', 'New Hero');
       if (name === null) return;
-      const hero = await api('/api/hero', { method: 'POST', body: JSON.stringify({ 'Hero Name': name, Age: state.selectedAge }) });
+      const hero = await api('/api/hero', { method: 'POST', body: JSON.stringify({ 'Hero Name': name, Age: state.selectedAge, Kingdom: state.selectedKingdom }) });
       state.project.heroes.push(hero);
       state.selectedHeroId = hero.id;
       renderAll();
@@ -1616,10 +1937,12 @@ async def api_create_hero(request: Request):
     state = current_state()
     payload = await request.json()
     ages = state["ages"] or ["Unassigned"]
+    kingdoms = state.get("kingdoms", ["Humans"])
     hero = {field["name"]: "" for field in state["fields"] if field["name"] not in {"ID", "Extra Images"}}
     hero.update({
         "id": str(uuid.uuid4()),
         "Age": payload.get("Age") or ages[0],
+        "Kingdom": payload.get("Kingdom") or kingdoms[0],
         "Hero Name": payload.get("Hero Name") or "New Hero",
         "Portrait": "",
         "Extra Images": [],
@@ -1856,6 +2179,44 @@ async def api_delete_god(god_name: str):
     return {"gods": state["gods"]}
 
 
+@app.post("/api/kingdom")
+async def api_create_kingdom(request: Request):
+    state = current_state()
+    payload = await request.json()
+    name = normalize_text(payload.get("name")) or "New Kingdom"
+    if name not in state["kingdoms"]:
+        state["kingdoms"].append(name)
+    write_state(current_project_dir(), state)
+    return {"kingdoms": state["kingdoms"]}
+
+
+@app.put("/api/kingdom/{kingdom_name}")
+async def api_rename_kingdom(kingdom_name: str, request: Request):
+    state = current_state()
+    payload = await request.json()
+    name = normalize_text(payload.get("name")) or kingdom_name
+    old = kingdom_name
+    state["kingdoms"] = [name if k == old else k for k in state["kingdoms"]]
+    for hero in state["heroes"]:
+        if hero.get("Kingdom") == old:
+            hero["Kingdom"] = name
+    write_state(current_project_dir(), state)
+    return {"kingdoms": state["kingdoms"]}
+
+
+@app.delete("/api/kingdom/{kingdom_name}")
+async def api_delete_kingdom(kingdom_name: str):
+    state = current_state()
+    old = kingdom_name
+    state["kingdoms"] = [k for k in state["kingdoms"] if k != old]
+    fallback = state["kingdoms"][0] if state["kingdoms"] else "Humans"
+    for hero in state["heroes"]:
+        if hero.get("Kingdom") == old:
+            hero["Kingdom"] = fallback
+    write_state(current_project_dir(), state)
+    return {"kingdoms": state["kingdoms"]}
+
+
 @app.post("/api/compare")
 async def api_compare(request: Request):
     payload = await request.json()
@@ -1923,6 +2284,74 @@ async def api_delete_field(field_name: str):
             del hero[field_name]
     write_state(current_project_dir(), state)
     return {"fields": state["fields"]}
+
+
+# Design Documents API
+@app.get("/api/docs/list")
+async def api_list_docs():
+    design_dir = APP_ROOT / "design"
+    design_dir.mkdir(exist_ok=True)
+    files = sorted([f.name for f in design_dir.iterdir() if f.suffix.lower() == ".md"])
+    return [{"filename": f} for f in files]
+
+
+@app.get("/api/docs/read")
+async def api_read_doc(filename: str):
+    design_dir = APP_ROOT / "design"
+    file_path = design_dir / filename
+    # Security: ensure the file is within the design directory
+    try:
+        file_path.resolve().relative_to(design_dir.resolve())
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+    content = file_path.read_text(encoding="utf-8")
+    return {"filename": filename, "content": content}
+
+
+@app.post("/api/docs/save")
+async def api_save_doc(request: Request):
+    payload = await request.json()
+    filename = payload.get("filename", "")
+    content = payload.get("content", "")
+    message = payload.get("message", f"Update {filename}")
+
+    if not filename or not filename.endswith(".md"):
+        raise HTTPException(status_code=400, detail="Filename must end with .md")
+
+    design_dir = APP_ROOT / "design"
+    design_dir.mkdir(exist_ok=True)
+    file_path = design_dir / filename
+
+    # Security check
+    try:
+        file_path.resolve().relative_to(design_dir.resolve())
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
+    # Write the file
+    file_path.write_text(content, encoding="utf-8")
+
+    # Git commit
+    try:
+        import subprocess
+        subprocess.run(
+            ["git", "add", str(file_path)],
+            cwd=str(APP_ROOT),
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "commit", "-m", message],
+            cwd=str(APP_ROOT),
+            check=False,
+            capture_output=True,
+        )
+    except Exception:
+        pass  # Git may fail if not configured, that's okay
+
+    return {"ok": True, "filename": filename}
 
 
 if __name__ == "__main__":
