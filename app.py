@@ -78,6 +78,15 @@ def default_project_state():
         "roles": [],
         "gods": [],
         "kingdoms": ["Humans", "Kingdom of Ores", "Kingdom of Magic", "Kingdom of Evil", "Kingdom of the Ancients", "Kingdom of the Beasts", "Kingdom of the Divines"],
+        "kingdoms_data": {
+            "Humans": {"description": "Versatile and balanced. Masters of adaptation and technology.", "forefathers": "First Men", "established": "Classical Age", "races": "Humans", "history": "The First Men built the earliest civilizations. Over ages they mastered warfare, diplomacy, and technology. Though individually weaker than other races, their unity and innovation allowed them to thrive."},
+            "Kingdom of Ores": {"description": "Mountain-dwelling master craftsmen and heavy infantry.", "forefathers": "Durin the Deathless", "established": "Classical Age", "races": "Dwarves", "history": "Forged in the heart of mountains, the dwarves were created by the god Moradin from stone and fire. They built labyrinthine halls beneath peaks, mastered metallurgy and rune-magic."},
+            "Kingdom of Magic": {"description": "Arcane-focused faction wielding powerful spellcraft.", "forefathers": "Archmage Aelindor", "established": "Medieval Age", "races": "Elves, Wizards, Gnomes", "history": "When the veil between worlds thinned, the Elves emerged from the Feywilds. Aelindor taught mortals to harness mana. The Gnomes brought alchemical ingenuity. They built the Crystal Spires."},
+            "Kingdom of Evil": {"description": "Practitioners of dark magic, necromancy, and forbidden arts.", "forefathers": "Lich Lord Vorthak", "established": "Medieval Age", "races": "Necromancers, Witches, Goblins", "history": "Vorthak was once a noble wizard who sought immortality. His experiments with death magic corrupted him. From his Black Citadel, he raised the first undead legions."},
+            "Kingdom of the Ancients": {"description": "Primitive but powerful beings bonded with primordial beasts.", "forefathers": "Great Mother Sauria", "established": "Classical Age", "races": "Silurian, Dinosaurs", "history": "Before civilization, the Silurian roamed jungles alongside dinosaurs. Great Mother Sauria was the first to bond with a T-Rex through blood rituals. They reject magic and technology."},
+            "Kingdom of the Beasts": {"description": "Monstrous creatures of immense physical power.", "forefathers": "Baal the Horned King", "established": "Classical Age", "races": "Minotaurs, Trolls, Balrogs, Dragons, Serpents", "history": "Baal was the first Minotaur to unite monster tribes beneath volcanic peaks. Trolls, Balrogs, and Dragons pledged fealty to his strength. They value dominance above all."},
+            "Kingdom of the Divines": {"description": "Divine beings of holy power and celestial might.", "forefathers": "The Creator Athenia", "established": "Classical Age", "races": "Gods, Angels, Demigods, Oracles, Archangels", "history": "Athenia, the Creator, breathed life into the first angels from starlight. They built the Celestial Citadel above the clouds. The Divines represent absolute order and judgment against darkness."},
+        },
         "fields": [],
         "heroes": [],
     }
@@ -311,9 +320,19 @@ def read_state(project_dir: Path):
 
     # Read kingdoms
     kingdoms = []
+    kingdoms_data = {}
     if "Kingdoms" in wb.sheetnames:
         kingdoms_ws = wb["Kingdoms"]
-        kingdoms = [normalize_text(row[0]) for row in kingdoms_ws.iter_rows(min_row=2, values_only=True) if normalize_text(row[0])]
+        for row in kingdoms_ws.iter_rows(min_row=2, values_only=True):
+            if row[0]:
+                kingdoms.append(normalize_text(row[0]))
+                kingdoms_data[normalize_text(row[0])] = {
+                    "description": normalize_text(row[1]) if len(row) > 1 else "",
+                    "forefathers": normalize_text(row[2]) if len(row) > 2 else "",
+                    "established": normalize_text(row[3]) if len(row) > 3 else "",
+                    "races": normalize_text(row[4]) if len(row) > 4 else "",
+                    "history": normalize_text(row[5]) if len(row) > 5 else "",
+                }
     if not kingdoms:
         kingdoms = ["Humans", "Kingdom of Ores", "Kingdom of Magic", "Kingdom of Evil", "Kingdom of the Ancients", "Kingdom of the Beasts", "Kingdom of the Divines"]
 
@@ -387,7 +406,7 @@ def read_state(project_dir: Path):
     if not gods:
         gods = sorted(set(h.get("God", "") for h in heroes if h.get("God") and h.get("God") != "None")) or []
 
-    return {"project_dir": str(project_dir), "fields": fields or [], "ages": ages or ["Unassigned"], "categories": categories, "roles": roles, "gods": gods, "kingdoms": kingdoms, "heroes": heroes}
+    return {"project_dir": str(project_dir), "fields": fields or [], "ages": ages or ["Unassigned"], "categories": categories, "roles": roles, "gods": gods, "kingdoms": kingdoms, "kingdoms_data": kingdoms_data, "heroes": heroes}
 
 
 def write_state(project_dir: Path, state):
@@ -424,9 +443,18 @@ def write_state(project_dir: Path, state):
 
     # Write Kingdoms sheet
     kingdoms_ws = wb.create_sheet("Kingdoms")
-    kingdoms_ws.append(["Kingdom"])
+    kingdoms_ws.append(["Kingdom", "Description", "Forefathers", "Established", "Races", "History"])
+    kingdoms_data = state.get("kingdoms_data", {})
     for kingdom in state.get("kingdoms", []):
-        kingdoms_ws.append([kingdom])
+        data = kingdoms_data.get(kingdom, {})
+        kingdoms_ws.append([
+            kingdom,
+            data.get("description", ""),
+            data.get("forefathers", ""),
+            data.get("established", ""),
+            data.get("races", ""),
+            data.get("history", ""),
+        ])
 
     # Write per-kingdom hero sheets
     kingdoms = state.get("kingdoms", ["Humans"])
@@ -1078,6 +1106,9 @@ INDEX_HTML = r"""
       if (!state.project.kingdoms || !state.project.kingdoms.length) {
         state.project.kingdoms = ['Humans', 'Kingdom of Ores', 'Kingdom of Magic', 'Kingdom of Evil', 'Kingdom of the Ancients', 'Kingdom of the Beasts', 'Kingdom of the Divines'];
       }
+      if (!state.project.kingdoms_data) {
+        state.project.kingdoms_data = {};
+      }
       state.selectedKingdom = state.selectedKingdom && state.project.kingdoms.includes(state.selectedKingdom)
         ? state.selectedKingdom
         : state.project.kingdoms[0];
@@ -1194,10 +1225,14 @@ INDEX_HTML = r"""
       }
       heroList.innerHTML = heroes.map(hero => {
         const type = hero['Unit Type'] || hero.Role || 'Unknown';
+        const kingdomData = state.project?.kingdoms_data?.[hero.Kingdom] || {};
+        const kingdomLabel = kingdomData.description 
+          ? `${escapeHtml(hero.Kingdom || '')}: ${escapeHtml(kingdomData.description)}`
+          : escapeHtml(hero.Kingdom || '');
         return `<div class="hero-card ${hero.id === state.selectedHeroId ? 'active' : ''}" onclick="selectHero(${js(hero.id)})">
           <div class="hero-card-title">${escapeHtml(hero['Hero Name'] || 'Unnamed Hero')}</div>
           <div class="small muted">${escapeHtml(type)}</div>
-          <div class="small muted">${escapeHtml(hero.Kingdom || '')} &middot; ${escapeHtml(hero.God || hero.Age || '')}</div>
+          <div class="small muted" title="${escapeAttr(kingdomData.description || '')}">${kingdomLabel} &middot; ${escapeHtml(hero.God || hero.Age || '')}</div>
         </div>`;
       }).join('');
     }
@@ -1480,9 +1515,11 @@ INDEX_HTML = r"""
     function renderKingdoms() {
       const container = document.getElementById('kingdomListContent');
       const kingdoms = state.project?.kingdoms || [];
+      const kingdomsData = state.project?.kingdoms_data || {};
       const heroes = state.project?.heroes || [];
       container.innerHTML = kingdoms.map(kingdom => {
         const count = heroes.filter(h => h.Kingdom === kingdom).length;
+        const data = kingdomsData[kingdom] || {};
         return `<div class="field-card">
           <div class="field-grid">
             <div class="field">
@@ -1490,12 +1527,18 @@ INDEX_HTML = r"""
               <input class="input" value="${escapeAttr(kingdom)}" onchange="renameKingdom(${js(kingdom)}, this.value)" />
             </div>
             <div class="field">
-              <label class="small muted">Heroes in this kingdom</label>
+              <label class="small muted">Heroes</label>
               <div class="input" style="opacity:0.6;cursor:default;">${count} hero${count !== 1 ? 'es' : ''}</div>
             </div>
             <div class="field" style="align-content:end;">
+              <button class="btn" onclick="editKingdomDetails(${js(kingdom)})">Edit Details</button>
               <button class="btn danger" onclick="deleteKingdom(${js(kingdom)})">Delete</button>
             </div>
+          </div>
+          <div class="small muted" style="padding: 0 14px 10px;">
+            ${escapeHtml(data.description || '')}
+            ${data.forefathers ? `<br><strong>Forefathers:</strong> ${escapeHtml(data.forefathers)}` : ''}
+            ${data.races ? ` | <strong>Races:</strong> ${escapeHtml(data.races)}` : ''}
           </div>
         </div>`;
       }).join('');
@@ -1506,15 +1549,53 @@ INDEX_HTML = r"""
       if (!name) return;
       const data = await api('/api/kingdom', { method: 'POST', body: JSON.stringify({ name }) });
       state.project.kingdoms = data.kingdoms;
+      state.project.kingdoms_data = data.kingdoms_data;
       renderAll();
       queueAutosave();
     }
 
     async function renameKingdom(oldName, newName) {
       if (!newName || newName === oldName) return;
-      const data = await api(`/api/kingdom/${encodeURIComponent(oldName)}`, { method: 'PUT', body: JSON.stringify({ name: newName }) });
-      state.project.kingdoms = data.kingdoms;
+      const data = state.project.kingdoms_data?.[oldName] || {};
+      const payload = {
+        name: newName,
+        description: data.description || '',
+        forefathers: data.forefathers || '',
+        established: data.established || '',
+        races: data.races || '',
+        history: data.history || '',
+      };
+      const result = await api(`/api/kingdom/${encodeURIComponent(oldName)}`, { method: 'PUT', body: JSON.stringify(payload) });
+      state.project.kingdoms = result.kingdoms;
+      state.project.kingdoms_data = result.kingdoms_data;
       state.project.heroes.forEach(h => { if (h.Kingdom === oldName) h.Kingdom = newName; });
+      renderAll();
+      queueAutosave();
+    }
+
+    async function editKingdomDetails(kingdom) {
+      const data = state.project.kingdoms_data?.[kingdom] || {};
+      const description = prompt(`Description for ${kingdom}:`, data.description || '');
+      if (description === null) return;
+      const forefathers = prompt('Forefathers:', data.forefathers || '');
+      if (forefathers === null) return;
+      const established = prompt('Established (Age):', data.established || '');
+      if (established === null) return;
+      const races = prompt('Races:', data.races || '');
+      if (races === null) return;
+      const history = prompt('History (short):', data.history || '');
+      if (history === null) return;
+      
+      const payload = {
+        name: kingdom,
+        description,
+        forefathers,
+        established,
+        races,
+        history,
+      };
+      const result = await api(`/api/kingdom/${encodeURIComponent(kingdom)}`, { method: 'PUT', body: JSON.stringify(payload) });
+      state.project.kingdoms_data = result.kingdoms_data;
       renderAll();
       queueAutosave();
     }
@@ -1527,6 +1608,7 @@ INDEX_HTML = r"""
       if (!confirm(msg)) return;
       const data = await api(`/api/kingdom/${encodeURIComponent(name)}`, { method: 'DELETE' });
       state.project.kingdoms = data.kingdoms;
+      state.project.kingdoms_data = data.kingdoms_data;
       state.project.heroes.forEach(h => { if (h.Kingdom === name) h.Kingdom = state.project.kingdoms[0] || 'Humans'; });
       renderAll();
       queueAutosave();
@@ -2192,22 +2274,52 @@ async def api_create_kingdom(request: Request):
     name = normalize_text(payload.get("name")) or "New Kingdom"
     if name not in state["kingdoms"]:
         state["kingdoms"].append(name)
+    # Also add to kingdoms_data if present
+    if "kingdoms_data" not in state:
+        state["kingdoms_data"] = {}
+    state["kingdoms_data"][name] = {
+        "description": payload.get("description", ""),
+        "forefathers": payload.get("forefathers", ""),
+        "established": payload.get("established", ""),
+        "races": payload.get("races", ""),
+        "history": payload.get("history", ""),
+    }
     write_state(current_project_dir(), state)
-    return {"kingdoms": state["kingdoms"]}
+    return {"kingdoms": state["kingdoms"], "kingdoms_data": state.get("kingdoms_data", {})}
 
 
 @app.put("/api/kingdom/{kingdom_name}")
-async def api_rename_kingdom(kingdom_name: str, request: Request):
+async def api_update_kingdom(kingdom_name: str, request: Request):
     state = current_state()
     payload = await request.json()
-    name = normalize_text(payload.get("name")) or kingdom_name
     old = kingdom_name
-    state["kingdoms"] = [name if k == old else k for k in state["kingdoms"]]
+    new_name = normalize_text(payload.get("name")) or old
+    
+    # Update name in list
+    state["kingdoms"] = [new_name if k == old else k for k in state["kingdoms"]]
+    
+    # Update hero references
     for hero in state["heroes"]:
         if hero.get("Kingdom") == old:
-            hero["Kingdom"] = name
+            hero["Kingdom"] = new_name
+    
+    # Update kingdom data
+    if "kingdoms_data" not in state:
+        state["kingdoms_data"] = {}
+    if old in state["kingdoms_data"]:
+        state["kingdoms_data"][new_name] = state["kingdoms_data"].pop(old)
+    
+    # Update fields from payload
+    state["kingdoms_data"][new_name] = {
+        "description": payload.get("description", state["kingdoms_data"].get(new_name, {}).get("description", "")),
+        "forefathers": payload.get("forefathers", state["kingdoms_data"].get(new_name, {}).get("forefathers", "")),
+        "established": payload.get("established", state["kingdoms_data"].get(new_name, {}).get("established", "")),
+        "races": payload.get("races", state["kingdoms_data"].get(new_name, {}).get("races", "")),
+        "history": payload.get("history", state["kingdoms_data"].get(new_name, {}).get("history", "")),
+    }
+    
     write_state(current_project_dir(), state)
-    return {"kingdoms": state["kingdoms"]}
+    return {"kingdoms": state["kingdoms"], "kingdoms_data": state["kingdoms_data"]}
 
 
 @app.delete("/api/kingdom/{kingdom_name}")
@@ -2219,8 +2331,10 @@ async def api_delete_kingdom(kingdom_name: str):
     for hero in state["heroes"]:
         if hero.get("Kingdom") == old:
             hero["Kingdom"] = fallback
+    if "kingdoms_data" in state and old in state["kingdoms_data"]:
+        del state["kingdoms_data"][old]
     write_state(current_project_dir(), state)
-    return {"kingdoms": state["kingdoms"]}
+    return {"kingdoms": state["kingdoms"], "kingdoms_data": state.get("kingdoms_data", {})}
 
 
 @app.post("/api/compare")

@@ -30,28 +30,35 @@ class SupabaseDB:
         pass
     
     # ─── Kingdoms ───
-    def get_kingdoms(self) -> List[str]:
+    def get_kingdoms(self) -> List[Dict]:
         if not self.is_cloud:
             return self._local_get_kingdoms()
-        result = self.client.table("kingdoms").select("name").order("name").execute()
-        return [r["name"] for r in result.data]
+        result = self.client.table("kingdoms").select("*").order("name").execute()
+        return result.data
     
-    def add_kingdom(self, name: str):
-        if not self.is_cloud:
-            return self._local_add_kingdom(name)
-        self.client.table("kingdoms").insert({"name": name}).execute()
+    def get_kingdom_names(self) -> List[str]:
+        """Get just the names for dropdowns/filters."""
+        kingdoms = self.get_kingdoms()
+        return [k["name"] for k in kingdoms]
     
-    def rename_kingdom(self, old: str, new: str):
+    def add_kingdom(self, kingdom: Dict):
         if not self.is_cloud:
-            return self._local_rename_kingdom(old, new)
-        self.client.table("kingdoms").update({"name": new}).eq("name", old).execute()
-        self.client.table("heroes").update({"kingdom": new}).eq("kingdom", old).execute()
+            return self._local_add_kingdom(kingdom)
+        self.client.table("kingdoms").insert(kingdom).execute()
+    
+    def update_kingdom(self, old_name: str, kingdom: Dict):
+        if not self.is_cloud:
+            return self._local_update_kingdom(old_name, kingdom)
+        new_name = kingdom.get("name", old_name)
+        if new_name != old_name:
+            self.client.table("heroes").update({"kingdom": new_name}).eq("kingdom", old_name).execute()
+        self.client.table("kingdoms").update(kingdom).eq("name", old_name).execute()
     
     def delete_kingdom(self, name: str):
         if not self.is_cloud:
             return self._local_delete_kingdom(name)
         # Reassign heroes to first kingdom
-        first = self.get_kingdoms()[0]
+        first = self.get_kingdom_names()[0]
         self.client.table("heroes").update({"kingdom": first}).eq("kingdom", name).execute()
         self.client.table("kingdoms").delete().eq("name", name).execute()
     
@@ -172,12 +179,19 @@ class SupabaseDB:
         return hero
     
     # ─── Local Fallback (for dev without Supabase) ───
-    def _local_get_kingdoms(self) -> List[str]:
-        return ["Humans", "Kingdom of Ores", "Kingdom of Magic", "Kingdom of Evil", 
-                "Kingdom of the Ancients", "Kingdom of the Beasts", "Kingdom of the Divines"]
+    def _local_get_kingdoms(self) -> List[Dict]:
+        return [
+            {"name": "Humans", "description": "Versatile and balanced", "forefathers": "First Men", "established": "Classical Age", "races": "Humans", "history": "The First Men built the earliest civilizations..."},
+            {"name": "Kingdom of Ores", "description": "Mountain-dwelling craftsmen", "forefathers": "Durin the Deathless", "established": "Classical Age", "races": "Dwarves", "history": "Forged in the heart of mountains..."},
+            {"name": "Kingdom of Magic", "description": "Arcane-focused faction", "forefathers": "Archmage Aelindor", "established": "Medieval Age", "races": "Elves, Wizards, Gnomes", "history": "When the veil between worlds thinned..."},
+            {"name": "Kingdom of Evil", "description": "Dark magic practitioners", "forefathers": "Lich Lord Vorthak", "established": "Medieval Age", "races": "Necromancers, Witches, Goblins", "history": "Vorthak was once a noble wizard..."},
+            {"name": "Kingdom of the Ancients", "description": "Primitive but powerful", "forefathers": "Great Mother Sauria", "established": "Classical Age", "races": "Silurian, Dinosaurs", "history": "Before the rise of civilization..."},
+            {"name": "Kingdom of the Beasts", "description": "Monstrous creatures", "forefathers": "Baal the Horned King", "established": "Classical Age", "races": "Minotaurs, Trolls, Balrogs, Dragons, Serpents", "history": "Baal was the first Minotaur to unite..."},
+            {"name": "Kingdom of the Divines", "description": "Divine beings", "forefathers": "The Creator Athenia", "established": "Classical Age", "races": "Gods, Angels, Demigods, Oracles, Archangels", "history": "Athenia, the Creator, breathed life..."},
+        ]
     
-    def _local_add_kingdom(self, name: str): pass
-    def _local_rename_kingdom(self, old: str, new: str): pass
+    def _local_add_kingdom(self, kingdom: Dict): pass
+    def _local_update_kingdom(self, old: str, kingdom: Dict): pass
     def _local_delete_kingdom(self, name: str): pass
     
     def _local_get_ages(self) -> List[str]:
